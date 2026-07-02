@@ -1,0 +1,40 @@
+spring:
+  application:
+    name: carpooling-backend
+  datasource:
+    url: jdbc:postgresql://localhost:5432/carpooling_db
+    username: postgres
+    password: postgres
+    driver-class-name: org.postgresql.Driver
+  jpa:
+    hibernate:
+      ddl-auto: update
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.PostgreSQLDialect
+        format_sql: true
+        show-sql: true
+    show-sql: true
+
+    logging:
+      level:
+        org.hibernate.SQL: DEBUG
+        org.hibernate.orm.jdbc.bind: TRACE
+  jackson:
+    default-property-inclusion: non_null
+
+server:
+  port: 8080
+  servlet:
+    context-path: /api
+
+jwt:
+  secret: your-secret-key-change-in-production-very-important-32-chars-min
+  expiration: 86400000
+
+ml-service:
+  url: http://localhost:5000
+
+google:
+  maps:
+    api-key: YOUR_GOOGLE_MAPS_API_KEY

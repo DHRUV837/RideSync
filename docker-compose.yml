@@ -1,0 +1,101 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: carpooling-postgres
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: carpooling_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./database/schema.sql:/docker-entrypoint-initdb.d/init.sql
+    networks:
+      - carpooling-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  osrm:
+    image: osrm/osrm-backend:v5.27.1
+    container_name: carpooling-osrm
+    ports:
+      - "5001:5000"
+    command: osrm-routed --algorithm mld /data/india-latest.osrm
+    volumes:
+      - osrm_data:/data
+    networks:
+      - carpooling-network
+    restart: unless-stopped
+
+  ml-service:
+    build:
+      context: ./ml-service
+      dockerfile: Dockerfile
+    container_name: carpooling-ml
+    ports:
+      - "5000:5000"
+    environment:
+      FLASK_ENV: development
+      OSRM_URL: http://osrm:5000
+    networks:
+      - carpooling-network
+    depends_on:
+      - postgres
+      - osrm
+    volumes:
+      - ./ml-service:/app
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: carpooling-backend
+    ports:
+      - "8080:8080"
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/carpooling_db
+      SPRING_DATASOURCE_USERNAME: postgres
+      SPRING_DATASOURCE_PASSWORD: postgres
+      ML_SERVICE_URL: http://ml-service:5000
+      OSRM_URL: http://osrm:5000
+    networks:
+      - carpooling-network
+    depends_on:
+      postgres:
+        condition: service_healthy
+      ml-service:
+        condition: service_started
+      osrm:
+        condition: service_started
+    volumes:
+      - ./backend:/app
+
+  frontend:
+    image: node:18-alpine
+    container_name: carpooling-frontend
+    working_dir: /app
+    command: npm run dev -- --host 0.0.0.0
+    ports:
+      - "5173:5173"
+    environment:
+      VITE_OSRM_URL: http://localhost:5001
+    volumes:
+      - ./frontend:/app
+    networks:
+      - carpooling-network
+    depends_on:
+      - backend
+
+volumes:
+  postgres_data:
+  osrm_data:
+
+networks:
+  carpooling-network:
+    driver: bridge
