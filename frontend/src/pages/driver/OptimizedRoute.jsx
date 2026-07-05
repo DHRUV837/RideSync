@@ -190,6 +190,10 @@ export default function OptimizedRoute() {
                       id: booking.id,
                       riderName: booking.rider?.user?.fullName || 'Passenger',
                       pickupAddress: booking.pickupAddress,
+                      dropoffAddress: booking.dropoffAddress,
+                      dropoffLat: booking.dropoffLatitude,
+                      dropoffLon: booking.dropoffLongitude,
+                      fare: routeData?.passengerSegments?.find(segment => segment.bookingId === booking.id)?.fare,
                     }))}
                   />
                 </div>

@@ -1,92 +1,87 @@
 export default function OptimizationTimeline({ optimizedWaypoints, acceptedRiders, routeSteps }) {
   if (!optimizedWaypoints || optimizedWaypoints.length === 0) return null;
 
-  // Build timeline with rider information
-  const timeline = optimizedWaypoints.map((wp, index) => {
+  // Build timeline with pickup and dropoff sequence
+  const timeline = [];
+  
+  optimizedWaypoints.forEach((wp, index) => {
     if (wp.id === 'origin' || wp.id === 'start') {
-      return {
+      timeline.push({
         ...wp,
         type: 'origin',
         label: 'Driver Start',
         location: 'Start Location',
-        order: index,
-      };
-    }
-    if (wp.id === 'destination' || wp.id === 'end') {
-      return {
+        order: timeline.length,
+      });
+    } else if (wp.id === 'destination' || wp.id === 'end') {
+      timeline.push({
         ...wp,
         type: 'destination',
         label: 'Driver Destination',
         location: 'End Location',
-        order: index,
-      };
+        order: timeline.length,
+      });
+    } else {
+      // For each pickup waypoint, add both pickup and dropoff entries
+      const riderId = wp.riderId || wp.id?.replace('pickup-', '');
+      const rider = acceptedRiders?.find(r => String(r.id) === String(riderId));
+      const pickupNumber = timeline.filter(t => t.type === 'pickup').length + 1;
+      
+      // Add pickup entry
+      timeline.push({
+        ...wp,
+        type: 'pickup',
+        label: `Pickup ${rider?.passengerName || rider?.riderName || wp.riderName || 'Passenger'}`,
+        location: rider?.pickupAddress || wp.address || 'Pickup Location',
+        pickupAddress: rider?.pickupAddress || wp.address || 'Pickup Location',
+        dropAddress: rider?.dropAddress || rider?.dropoffAddress || 'Drop location',
+        riderName: rider?.passengerName || rider?.riderName || wp.riderName,
+        order: timeline.length,
+        sequenceNumber: pickupNumber,
+      });
+      
+      // Add dropoff entry
+      timeline.push({
+        ...wp,
+        type: 'dropoff',
+        label: `Dropoff ${rider?.passengerName || rider?.riderName || wp.riderName || 'Passenger'}`,
+        location: rider?.dropAddress || rider?.dropoffAddress || 'Drop location',
+        riderName: rider?.passengerName || rider?.riderName || wp.riderName,
+        order: timeline.length,
+        sequenceNumber: pickupNumber,
+      });
     }
-
-    const riderId = wp.riderId || wp.id?.replace('pickup-', '');
-    const rider = acceptedRiders?.find(r => String(r.id) === String(riderId));
-    return {
-      ...wp,
-      type: 'pickup',
-      label: `Pickup ${rider?.passengerName || rider?.riderName || wp.riderName || 'Passenger'}`,
-      location: rider?.pickupAddress || wp.address || 'Pickup Location',
-      pickupAddress: rider?.pickupAddress || wp.address || 'Pickup Location',
-      dropAddress: rider?.dropAddress || rider?.dropoffAddress || 'Drop location',
-      riderName: rider?.passengerName || rider?.riderName || wp.riderName,
-      order: index,
-    };
   });
-
-  const pickupCount = timeline.filter(t => t.type === 'pickup').length;
 
   return (
     <div className="card" style={{ overflow: 'auto', maxHeight: 480 }}>
       <h3 style={{ marginBottom: 20, fontSize: 16, fontWeight: 600 }}>
-        Optimized Pickup Sequence
+        Optimized Route Sequence
       </h3>
       <div className="route-steps">
         {timeline.map((step, i) => (
-          <div key={step.id || i} className="route-step">
+          <div key={`${step.type}-${step.order}`} className="route-step">
             <div className="route-step-indicator">
               <div 
                 className="route-step-dot" 
                 style={{ 
                   background: step.type === 'origin' ? '#00d4aa' : 
-                           step.type === 'destination' ? '#f53b6e' : '#4f9cf9' 
+                           step.type === 'destination' ? '#f53b6e' : 
+                           step.type === 'pickup' ? '#00d4aa' : '#f53b6e'
                 }} 
               />
               {i < timeline.length - 1 && <div className="route-step-line" />}
             </div>
             <div className="route-step-content" style={{ paddingBottom: i < timeline.length - 1 ? 4 : 0 }}>
               <h4 style={{ fontSize: 13, fontWeight: 600 }}>
-                {step.label}
-                {step.type === 'pickup' && (
-                  <span style={{ 
-                    marginLeft: 8, 
-                    fontSize: 11, 
-                    color: '#4f9cf9',
-                    fontWeight: 500 
-                  }}>
-                    #{timeline.filter((s, idx) => s.type === 'pickup' && idx <= i).length}
-                  </span>
-                )}
+                {step.type === 'origin' && '🚗 Driver Start'}
+                {step.type === 'pickup' && `📍 Pickup #${step.sequenceNumber} - ${step.riderName || 'Passenger'}`}
+                {step.type === 'dropoff' && `🎯 Dropoff #${step.sequenceNumber} - ${step.riderName || 'Passenger'}`}
+                {step.type === 'destination' && '🏁 Driver Destination'}
               </h4>
-              {step.type === 'pickup' ? (
-                <>
-                  <p style={{ fontSize: 12, color: 'var(--text-muted)', margin: '4px 0' }}>
-                    Pickup: {step.pickupAddress || step.location || 'Pickup location'}
-                  </p>
-                  <p style={{ fontSize: 12, color: 'var(--text-muted)', margin: '4px 0' }}>
-                    Drop: {step.dropAddress || 'Drop location'}
-                  </p>
-                  <div style={{ fontSize: 11, color: 'var(--text-secondary)', marginTop: 2 }}>
-                    Passenger: {step.riderName || 'Unknown'}
-                  </div>
-                </>
-              ) : (
-                <p style={{ fontSize: 12, color: 'var(--text-muted)', margin: '4px 0' }}>
-                  {step.location}
-                </p>
-              )}
+              <p style={{ fontSize: 12, color: 'var(--text-muted)', margin: '4px 0' }}>
+                {step.location}
+              </p>
             </div>
           </div>
         ))}
@@ -104,11 +99,12 @@ export default function OptimizationTimeline({ optimizedWaypoints, acceptedRider
         <div style={{ fontSize: 12, lineHeight: 1.8, color: 'var(--text-secondary)' }}>
           🚗 Driver Start<br />
           {timeline.filter(t => t.type === 'pickup').map((pickup, i) => (
-            <span key={pickup.id}>
-              {i + 1}. {pickup.label} ({pickup.location})<br />
+            <span key={pickup.order}>
+              📍 Pickup #{i + 1}: {pickup.riderName || 'Passenger'}<br />
+              🎯 Dropoff #{i + 1}: {pickup.riderName || 'Passenger'}<br />
             </span>
           ))}
-          📍 Destination
+          🏁 Driver Destination
         </div>
       </div>
     </div>
