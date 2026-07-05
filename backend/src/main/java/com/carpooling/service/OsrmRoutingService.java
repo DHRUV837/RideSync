@@ -20,7 +20,25 @@ public class OsrmRoutingService {
     private final String osrmBaseUrl = "https://router.project-osrm.org/route/v1/driving";
 
     public OsrmRouteSummary getRouteSummary(double startLat, double startLon, double endLat, double endLon) {
-        String coordinates = String.format(Locale.US, "%s,%s;%s,%s", startLon, startLat, endLon, endLat);
+        return getRouteSummaryThroughWaypoints(List.of(
+                new LatLon(startLat, startLon),
+                new LatLon(endLat, endLon)
+        ));
+    }
+
+    /**
+     * Fetches a driving route through an ordered list of waypoints (origin → stops → destination).
+     */
+    public OsrmRouteSummary getRouteSummaryThroughWaypoints(List<LatLon> waypoints) {
+        if (waypoints == null || waypoints.size() < 2) {
+            throw new IllegalArgumentException("At least two waypoints are required for routing");
+        }
+
+        String coordinates = waypoints.stream()
+                .map(wp -> String.format(Locale.US, "%s,%s", wp.longitude(), wp.latitude()))
+                .reduce((a, b) -> a + ";" + b)
+                .orElse("");
+
         String url = osrmBaseUrl + "/" + coordinates + "?overview=full&geometries=geojson&steps=false";
 
         try {
@@ -55,6 +73,9 @@ public class OsrmRoutingService {
         } catch (Exception ex) {
             throw new RuntimeException("Could not fetch OSRM route: " + ex.getMessage(), ex);
         }
+    }
+
+    public record LatLon(double latitude, double longitude) {
     }
 
     public record OsrmRouteSummary(String geometry, double distanceKm, double durationMinutes) {

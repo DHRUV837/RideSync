@@ -51,6 +51,9 @@ export const rideService = {
   cancelRide: (rideId) => api.put(`/rides/${rideId}/cancel`),
   verifyOtp: (bookingId, data) => api.post(`/rides/bookings/${bookingId}/verify-otp`, data),
   completeBooking: (bookingId) => api.post(`/rides/bookings/${bookingId}/complete`),
+  // M3: Dynamic Fare Engine
+  getFareMatrix: (rideId) => api.get(`/rides/${rideId}/fares`),
+  calculateFare: (rideId, pickup, dropoff) => api.get(`/rides/${rideId}/fare`, { params: { pickup, dropoff } }),
 };
 
 export const adminService = {

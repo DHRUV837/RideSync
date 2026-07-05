@@ -5,6 +5,8 @@ import lombok.Builder;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 
+import java.util.List;
+
 @Data
 @NoArgsConstructor
 @AllArgsConstructor
@@ -17,6 +19,9 @@ public class CreateRideRequest {
     private Double endLongitude;
     private String endAddress;
     private Integer availableSeats;
+    /** Fare from origin to destination (base fare for the full route). */
     private Double estimatedFare;
     private String departureTime; // ISO format
+    /** Optional intermediate stops between origin and destination. */
+    private List<RideStopDto> stops;
 }

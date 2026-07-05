@@ -4,7 +4,7 @@
 -- Create ENUM types
 CREATE TYPE user_role AS ENUM ('RIDER', 'DRIVER', 'ADMIN');
 CREATE TYPE ride_status AS ENUM ('PENDING', 'ONGOING', 'COMPLETED', 'CANCELLED');
-CREATE TYPE booking_status AS ENUM ('PENDING', 'CONFIRMED', 'ONGOING', 'COMPLETED', 'CANCELLED');
+CREATE TYPE booking_status AS ENUM ('PENDING', 'ACCEPTED', 'ONGOING', 'COMPLETED', 'CANCELLED', 'REJECTED');
 CREATE TYPE complaint_status AS ENUM ('PENDING', 'UNDER_REVIEW', 'RESOLVED', 'REJECTED');
 
 -- Users Table
@@ -85,6 +85,7 @@ CREATE TABLE rides (
     -- Use VARCHAR for status to match Hibernate string enum handling
     status VARCHAR(20) DEFAULT 'PENDING',
     optimized_route TEXT,
+    route_geometry TEXT,
     total_distance DECIMAL(10,2),
     total_duration BIGINT,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -97,9 +98,11 @@ CREATE TABLE ride_stops (
     id BIGSERIAL PRIMARY KEY,
     ride_id BIGINT NOT NULL,
     stop_order INT NOT NULL,
+    stop_name VARCHAR(255) NOT NULL,
     latitude DECIMAL(10,6) NOT NULL,
     longitude DECIMAL(10,6) NOT NULL,
     address TEXT NOT NULL,
+    fare_from_origin DECIMAL(10,2) NOT NULL,
     stop_type VARCHAR(20),
     is_completed BOOLEAN DEFAULT false,
     FOREIGN KEY (ride_id) REFERENCES rides(id) ON DELETE CASCADE
@@ -118,9 +121,11 @@ CREATE TABLE ride_bookings (
     dropoff_address TEXT NOT NULL,
     seats_booked INT NOT NULL,
     fare DECIMAL(10,2) NOT NULL,
+    pickup_stop_sequence INT DEFAULT 0 NOT NULL,
+    dropoff_stop_sequence INT DEFAULT 0 NOT NULL,
     status booking_status DEFAULT 'PENDING',
     booked_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    confirmed_at TIMESTAMP,
+    accepted_at TIMESTAMP,
     started_at TIMESTAMP,
     completed_at TIMESTAMP,
     cancelled_at TIMESTAMP,
@@ -166,5 +171,6 @@ CREATE INDEX idx_rides_driver ON rides(driver_id);
 CREATE INDEX idx_rides_status ON rides(status);
 CREATE INDEX idx_bookings_ride ON ride_bookings(ride_id);
 CREATE INDEX idx_bookings_rider ON ride_bookings(rider_id);
+CREATE INDEX idx_ride_stops_ride_order ON ride_stops(ride_id, stop_order);
 CREATE INDEX idx_ratings_ratee ON ratings(ratee_id);
 CREATE INDEX idx_complaints_status ON complaints(status);

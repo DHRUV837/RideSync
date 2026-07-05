@@ -41,9 +41,11 @@ export default function OptimizedRoute() {
 
   const confirmedBookings = useMemo(() => {
     if (!selectedRide) return [];
-    return (selectedRide.bookings || []).filter(b => b.status === 'CONFIRMED' || b.status === 'ONGOING');
-  }, [selectedRide]);
 
+    return (selectedRide.bookings || []).filter(b =>
+      ['ACCEPTED', 'ONGOING'].includes(b.status)
+    );
+  }, [selectedRide]);
   const hasPickupStops = confirmedBookings.length > 0;
 
   const handleRideChange = (e) => {
@@ -56,7 +58,7 @@ export default function OptimizedRoute() {
 
   const handleOptimize = async () => {
     if (!selectedRide || !hasPickupStops) return;
-    
+
     setOptimizing(true);
     try {
       const rideData = await optimizationService.getOptimizationData(selectedRide.id).catch(() => ({

@@ -3,6 +3,7 @@ import com.carpooling.entity.Rating;
 import com.carpooling.dto.BookRideRequest;
 import com.carpooling.dto.BookingStatusUpdateRequest;
 import com.carpooling.dto.CreateRideRequest;
+import com.carpooling.dto.RideStopDto;
 import com.carpooling.dto.DriverAnalyticsDto;
 import com.carpooling.dto.OtpVerificationRequest;
 import com.carpooling.entity.*;
@@ -14,6 +15,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.ArrayList;
+import java.util.Comparator;
 
 import java.time.DayOfWeek;
 import java.time.LocalDateTime;
@@ -49,12 +51,18 @@ public class RideService {
     @Autowired
     private OsrmRoutingService osrmRoutingService;
 
+    @Autowired
+    private FareService fareService;
+
+    @Transactional
     public Ride createRide(Long driverId, CreateRideRequest request) {
         DriverProfile driver = driverProfileRepository.findByUserId(driverId);
 
         if (driver == null) {
             throw new RuntimeException("Driver not found");
         }
+
+        validateCreateRideRequest(request);
 
         Ride ride = new Ride();
         ride.setDriver(driver);
@@ -71,20 +79,125 @@ public class RideService {
         ride.setDepartureTime(LocalDateTime.parse(request.getDepartureTime(), formatter));
         ride.setStatus(Ride.RideStatus.PENDING);
 
+        List<RideStopDto> stopDtos = request.getStops() != null ? request.getStops() : List.of();
+        List<RideStop> rideStops = buildRideStops(ride, stopDtos);
+        ride.setStops(rideStops);
+
+        List<OsrmRoutingService.LatLon> routeWaypoints = buildRouteWaypoints(request, stopDtos);
         try {
-            OsrmRoutingService.OsrmRouteSummary routeSummary = osrmRoutingService.getRouteSummary(
-                    request.getStartLatitude(), request.getStartLongitude(), request.getEndLatitude(), request.getEndLongitude()
-            );
+            OsrmRoutingService.OsrmRouteSummary routeSummary = osrmRoutingService.getRouteSummaryThroughWaypoints(routeWaypoints);
             ride.setRouteGeometry(routeSummary.geometry());
             ride.setTotalDistance(routeSummary.distanceKm());
             ride.setTotalDuration(Math.round(routeSummary.durationMinutes()));
         } catch (Exception ignored) {
-            ride.setRouteGeometry("[]");
-            ride.setTotalDistance(estimateDistanceKm(request.getStartLatitude(), request.getStartLongitude(), request.getEndLatitude(), request.getEndLongitude()));
+            ride.setRouteGeometry(buildFallbackGeometry(routeWaypoints));
+            ride.setTotalDistance(estimateTotalDistanceKm(routeWaypoints));
             ride.setTotalDuration(Math.round(ride.getTotalDistance() / 35.0 * 60));
         }
 
         return rideRepository.save(ride);
+    }
+
+    private void validateCreateRideRequest(CreateRideRequest request) {
+        if (request.getStartLatitude() == null || request.getStartLongitude() == null
+                || request.getEndLatitude() == null || request.getEndLongitude() == null) {
+            throw new IllegalArgumentException("Origin and destination coordinates are required");
+        }
+        if (request.getEstimatedFare() == null || request.getEstimatedFare() <= 0) {
+            throw new IllegalArgumentException("Base fare must be greater than zero");
+        }
+        if (request.getAvailableSeats() == null || request.getAvailableSeats() <= 0) {
+            throw new IllegalArgumentException("At least one available seat is required");
+        }
+
+        List<RideStopDto> stops = request.getStops();
+        if (stops == null || stops.isEmpty()) {
+            return;
+        }
+
+        List<RideStopDto> sorted = stops.stream()
+                .sorted(Comparator.comparing(RideStopDto::getStopOrder))
+                .toList();
+
+        double previousFare = 0;
+        for (int i = 0; i < sorted.size(); i++) {
+            RideStopDto stop = sorted.get(i);
+            if (stop.getStopName() == null || stop.getStopName().isBlank()) {
+                throw new IllegalArgumentException("Each stop must have a name");
+            }
+            if (stop.getLatitude() == null || stop.getLongitude() == null) {
+                throw new IllegalArgumentException("Each stop must include coordinates");
+            }
+            if (stop.getStopOrder() == null || stop.getStopOrder() != i + 1) {
+                throw new IllegalArgumentException("Stop sequence numbers must be consecutive starting from 1");
+            }
+            if (stop.getFareFromOrigin() == null || stop.getFareFromOrigin() <= 0) {
+                throw new IllegalArgumentException("Each stop must have a fare from origin greater than zero");
+            }
+            if (stop.getFareFromOrigin() >= request.getEstimatedFare()) {
+                throw new IllegalArgumentException("Intermediate stop fares must be less than the destination base fare");
+            }
+            if (stop.getFareFromOrigin() <= previousFare) {
+                throw new IllegalArgumentException("Stop fares from origin must increase along the route");
+            }
+            previousFare = stop.getFareFromOrigin();
+        }
+    }
+
+    private List<RideStop> buildRideStops(Ride ride, List<RideStopDto> stopDtos) {
+        if (stopDtos == null || stopDtos.isEmpty()) {
+            return new ArrayList<>();
+        }
+
+        return stopDtos.stream()
+                .sorted(Comparator.comparing(RideStopDto::getStopOrder))
+                .map(dto -> {
+                    RideStop stop = new RideStop();
+                    stop.setRide(ride);
+                    stop.setStopOrder(dto.getStopOrder());
+                    stop.setStopName(dto.getStopName().trim());
+                    stop.setLatitude(dto.getLatitude());
+                    stop.setLongitude(dto.getLongitude());
+                    stop.setAddress(dto.getAddress() != null && !dto.getAddress().isBlank()
+                            ? dto.getAddress()
+                            : dto.getStopName());
+                    stop.setFareFromOrigin(dto.getFareFromOrigin());
+                    stop.setStopType("INTERMEDIATE");
+                    stop.setIsCompleted(false);
+                    return stop;
+                })
+                .collect(Collectors.toList());
+    }
+
+    private List<OsrmRoutingService.LatLon> buildRouteWaypoints(CreateRideRequest request, List<RideStopDto> stopDtos) {
+        List<OsrmRoutingService.LatLon> waypoints = new ArrayList<>();
+        waypoints.add(new OsrmRoutingService.LatLon(request.getStartLatitude(), request.getStartLongitude()));
+
+        if (stopDtos != null) {
+            stopDtos.stream()
+                    .sorted(Comparator.comparing(RideStopDto::getStopOrder))
+                    .forEach(stop -> waypoints.add(new OsrmRoutingService.LatLon(stop.getLatitude(), stop.getLongitude())));
+        }
+
+        waypoints.add(new OsrmRoutingService.LatLon(request.getEndLatitude(), request.getEndLongitude()));
+        return waypoints;
+    }
+
+    private String buildFallbackGeometry(List<OsrmRoutingService.LatLon> waypoints) {
+        List<double[]> points = waypoints.stream()
+                .map(wp -> new double[]{wp.longitude(), wp.latitude()})
+                .toList();
+        return points.toString();
+    }
+
+    private double estimateTotalDistanceKm(List<OsrmRoutingService.LatLon> waypoints) {
+        double total = 0;
+        for (int i = 0; i < waypoints.size() - 1; i++) {
+            OsrmRoutingService.LatLon from = waypoints.get(i);
+            OsrmRoutingService.LatLon to = waypoints.get(i + 1);
+            total += estimateDistanceKm(from.latitude(), from.longitude(), to.latitude(), to.longitude());
+        }
+        return total;
     }
 
     public List<Ride> getAvailableRides() {
@@ -100,9 +213,9 @@ public class RideService {
                 continue;
             }
 
-            boolean nearPickup = routeMatchingService.isPickupNearRoute(pickupLat, pickupLon, ride.getRouteGeometry(), maxDistanceKm);
-            boolean nearDestination = routeMatchingService.isPickupNearRoute(destinationLat, destinationLon, ride.getRouteGeometry(), maxDistanceKm);
-            if (nearPickup || nearDestination) {
+            // Use enhanced route matching with direction validation
+            boolean isMatch = routeMatchingService.isRouteMatch(pickupLat, pickupLon, destinationLat, destinationLon, ride.getRouteGeometry(), maxDistanceKm);
+            if (isMatch) {
                 matchedRides.add(ride);
             }
         }
@@ -142,6 +255,7 @@ public class RideService {
                 driverId,
                 List.of(
                         RideBooking.BookingStatus.PENDING,
+                        RideBooking.BookingStatus.ACCEPTED,
                         RideBooking.BookingStatus.CONFIRMED,
                         RideBooking.BookingStatus.ONGOING
                 )
@@ -287,6 +401,24 @@ public class RideService {
             throw new RuntimeException("Not enough seats available. Only " + ride.getAvailableSeats() + " seat(s) remaining.");
         }
 
+        if (ride.getDriver().getUser().getId().equals(riderId)) {
+            throw new RuntimeException("Drivers cannot book their own ride.");
+        }
+
+        boolean alreadyBooked = rideBookingRepository.findByRideId(ride.getId()).stream()
+                .anyMatch(b -> b.getRider().getUser().getId().equals(riderId) &&
+                        (b.getStatus() == RideBooking.BookingStatus.PENDING ||
+                         b.getStatus() == RideBooking.BookingStatus.ACCEPTED ||
+                         b.getStatus() == RideBooking.BookingStatus.ONGOING));
+        if (alreadyBooked) {
+            throw new RuntimeException("You already have an active booking for this ride.");
+        }
+
+        if (request.getPickupStopSequence() != null && request.getDropoffStopSequence() != null &&
+            request.getPickupStopSequence() >= request.getDropoffStopSequence()) {
+            throw new RuntimeException("Pickup stop must be before dropoff stop.");
+        }
+
         RideBooking booking = new RideBooking();
         booking.setRide(ride);
         booking.setRider(rider);
@@ -297,7 +429,10 @@ public class RideService {
         booking.setDropoffLongitude(request.getDropoffLongitude());
         booking.setDropoffAddress(request.getDropoffAddress());
         booking.setSeatsBooked(request.getSeatsToBook());
-        booking.setFare(ride.getEstimatedFare() * request.getSeatsToBook());
+        // M3: Dynamic fare — compute segment fare between pickup and dropoff stops
+        Double segmentFare = fareService.calculateFare(ride, request.getPickupAddress(), request.getDropoffAddress());
+        double perSeatFare = (segmentFare != null) ? segmentFare : ride.getEstimatedFare();
+        booking.setFare(perSeatFare * request.getSeatsToBook());
         booking.setStatus(RideBooking.BookingStatus.PENDING); // ✅ Fixed
         booking.setBookedAt(LocalDateTime.now());
 
@@ -305,8 +440,9 @@ public class RideService {
         String otp = String.format("%04d", (int)(Math.random() * 10000));
         booking.setOtp(otp);
 
-        ride.setAvailableSeats(ride.getAvailableSeats() - request.getSeatsToBook());
-        rideRepository.save(ride);
+        booking.setPickupStopSequence(request.getPickupStopSequence() != null ? request.getPickupStopSequence() : 0);
+        booking.setDropoffStopSequence(request.getDropoffStopSequence() != null ? request.getDropoffStopSequence() : 0);
+        // Note: Seats are now only deducted when the booking is ACCEPTED.
 
         return rideBookingRepository.save(booking);
     }
@@ -328,13 +464,21 @@ public class RideService {
         RideBooking booking = rideBookingRepository.findById(bookingId)
                 .orElseThrow(() -> new IllegalArgumentException("Booking not found"));
 
-        // ✅ Fixed — convert String to BookingStatus enum
+        RideBooking.BookingStatus oldStatus = booking.getStatus();
         RideBooking.BookingStatus newStatus = RideBooking.BookingStatus.valueOf(
                 request.getStatus().toUpperCase()
         );
 
-        // ✅ Fixed — compare enum to enum
-        if (RideBooking.BookingStatus.CANCELLED.equals(newStatus)) {
+        if (newStatus == RideBooking.BookingStatus.ACCEPTED && oldStatus == RideBooking.BookingStatus.PENDING) {
+            Ride ride = booking.getRide();
+            if (ride.getAvailableSeats() < booking.getSeatsBooked()) {
+                throw new IllegalArgumentException("Not enough available seats to accept this booking.");
+            }
+            ride.setAvailableSeats(ride.getAvailableSeats() - booking.getSeatsBooked());
+            rideRepository.save(ride);
+            booking.setAcceptedAt(LocalDateTime.now());
+        } else if (newStatus == RideBooking.BookingStatus.CANCELLED &&
+                  (oldStatus == RideBooking.BookingStatus.ACCEPTED || oldStatus == RideBooking.BookingStatus.CONFIRMED || oldStatus == RideBooking.BookingStatus.ONGOING)) {
             Ride ride = booking.getRide();
             if (ride != null) {
                 ride.setAvailableSeats(ride.getAvailableSeats() + booking.getSeatsBooked());
@@ -342,7 +486,6 @@ public class RideService {
             }
         }
 
-        // ✅ Fixed — set the actual newStatus not hardcoded PENDING
         booking.setStatus(newStatus);
         return rideBookingRepository.save(booking);
     }
@@ -359,7 +502,7 @@ public class RideService {
 
         // Verify booking status allows cancellation
         RideBooking.BookingStatus currentStatus = booking.getStatus();
-        if (currentStatus != RideBooking.BookingStatus.PENDING && currentStatus != RideBooking.BookingStatus.CONFIRMED) {
+        if (currentStatus != RideBooking.BookingStatus.PENDING && currentStatus != RideBooking.BookingStatus.ACCEPTED && currentStatus != RideBooking.BookingStatus.CONFIRMED) {
             throw new IllegalArgumentException("Booking cannot be cancelled. Current status: " + currentStatus);
         }
 
@@ -512,7 +655,8 @@ public class RideService {
         // Get accepted riders (CONFIRMED or ONGOING status)
         List<RideBooking> acceptedBookings = rideBookingRepository.findByRideId(rideId)
                 .stream()
-                .filter(b -> b.getStatus() == RideBooking.BookingStatus.CONFIRMED || 
+                .filter(b -> b.getStatus() == RideBooking.BookingStatus.ACCEPTED || 
+                           b.getStatus() == RideBooking.BookingStatus.CONFIRMED ||
                            b.getStatus() == RideBooking.BookingStatus.ONGOING)
                 .collect(Collectors.toList());
 

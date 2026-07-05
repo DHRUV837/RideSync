@@ -44,6 +44,12 @@ public class RideBooking {
     @Column(nullable = false)
     private String dropoffAddress;
 
+    @Column(nullable = false, columnDefinition = "integer default 0")
+    private Integer pickupStopSequence = 0;
+
+    @Column(nullable = false, columnDefinition = "integer default 0")
+    private Integer dropoffStopSequence = 0;
+
     @Column(nullable = false)
     private Integer seatsBooked;
 
@@ -52,14 +58,14 @@ public class RideBooking {
 
     @Enumerated(EnumType.STRING)
     @Column(name = "status", columnDefinition = "booking_status", nullable = false)
-    private BookingStatus status;  // PENDING, CONFIRMED, ONGOING, COMPLETED, CANCELLED
+    private BookingStatus status;  // PENDING, ACCEPTED, CONFIRMED, ONGOING, COMPLETED, CANCELLED, REJECTED
 
     @Column(nullable = false)
     private LocalDateTime bookedAt;
 
     private String otp;
 
-    private LocalDateTime confirmedAt;
+    private LocalDateTime acceptedAt;
 
     private LocalDateTime startedAt;
 
@@ -68,6 +74,6 @@ public class RideBooking {
     private LocalDateTime cancelledAt;
 
     public enum BookingStatus {
-        PENDING, CONFIRMED, ONGOING, COMPLETED, CANCELLED
+        PENDING, ACCEPTED, CONFIRMED, ONGOING, COMPLETED, CANCELLED, REJECTED
     }
 }

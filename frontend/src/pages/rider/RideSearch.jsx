@@ -17,6 +17,56 @@ const geocodeLocation = async (address) => {
   };
 };
 
+/**
+ * Build the fare ladder for a ride: origin (₹0) → stops → destination (estimatedFare).
+ * Returns an ordered array of { name, fareFromOrigin, lat, lon, address }.
+ */
+const buildFareLadder = (ride) => {
+  const ladder = [];
+
+  // Origin
+  ladder.push({
+    name: ride.startAddress,
+    fareFromOrigin: 0,
+    lat: ride.startLatitude,
+    lon: ride.startLongitude,
+    address: ride.startAddress,
+    type: 'origin',
+  });
+
+  // Intermediate stops (sorted by stopOrder)
+  const stops = ride.stops || [];
+  const sorted = [...stops].sort((a, b) => (a.stopOrder || 0) - (b.stopOrder || 0));
+  sorted.forEach((stop) => {
+    ladder.push({
+      name: stop.stopName,
+      fareFromOrigin: stop.fareFromOrigin,
+      lat: stop.latitude,
+      lon: stop.longitude,
+      address: stop.address || stop.stopName,
+      type: 'stop',
+    });
+  });
+
+  // Destination
+  ladder.push({
+    name: ride.endAddress,
+    fareFromOrigin: ride.estimatedFare,
+    lat: ride.endLatitude,
+    lon: ride.endLongitude,
+    address: ride.endAddress,
+    type: 'destination',
+  });
+
+  return ladder;
+};
+
+/** Compute segment fare between two ladder indices */
+const computeSegmentFare = (ladder, pickupIdx, dropoffIdx) => {
+  if (pickupIdx < 0 || dropoffIdx < 0 || pickupIdx >= dropoffIdx) return null;
+  return ladder[dropoffIdx].fareFromOrigin - ladder[pickupIdx].fareFromOrigin;
+};
+
 export default function RideSearch({ onNavigate }) {
   const { addNotification } = useApp();
   const [from, setFrom] = useState('');
@@ -28,6 +78,11 @@ export default function RideSearch({ onNavigate }) {
   const [bookingRide, setBookingRide] = useState(null);
   const [booked, setBooked] = useState(false);
   const [confirmLoading, setConfirmLoading] = useState(false);
+
+  // M3: stop selection state
+  const [pickupIdx, setPickupIdx] = useState(0);
+  const [dropoffIdx, setDropoffIdx] = useState(-1); // -1 = last
+  const [fareLadder, setFareLadder] = useState([]);
 
   const handleSearch = async (e) => {
     e.preventDefault();
@@ -63,6 +118,7 @@ export default function RideSearch({ onNavigate }) {
         distance: ride.totalDistance ? `${ride.totalDistance} km` : 'TBD',
         aiReason: 'Route proximity match based on OSRM geometry',
         stops: ride.stops || [],
+        _fareLadder: buildFareLadder(ride),
       }));
       setResults(normalized);
     } catch (error) {
@@ -74,7 +130,7 @@ export default function RideSearch({ onNavigate }) {
   };
 
   const handleBook = async (ride) => {
-    // ✅ Fetch fresh ride data before opening modal
+    // Fetch fresh ride data before opening modal
     try {
       const freshResponse = await rideService.getRideById(ride.id);
       const freshRide = freshResponse.data;
@@ -86,26 +142,36 @@ export default function RideSearch({ onNavigate }) {
           message: 'This ride is fully booked. Please search again.',
           type: 'error'
         });
-        // Refresh search results
         handleSearch({ preventDefault: () => {} });
         return;
       }
 
-      // Update ride with fresh data
+      const ladder = buildFareLadder({ ...ride, ...freshRide, stops: freshRide.stops || ride.stops });
+      setFareLadder(ladder);
+      setPickupIdx(0);
+      setDropoffIdx(ladder.length - 1);
+
       setBookingRide({
         ...ride,
         availableSeats: freshSeats,
       });
     } catch (e) {
       console.error('Could not verify seats:', e);
+      const ladder = ride._fareLadder || buildFareLadder(ride);
+      setFareLadder(ladder);
+      setPickupIdx(0);
+      setDropoffIdx(ladder.length - 1);
       setBookingRide(ride);
     }
   };
 
+  const currentSegmentFare = fareLadder.length > 0
+    ? computeSegmentFare(fareLadder, pickupIdx, dropoffIdx)
+    : null;
+
   const confirmBook = async () => {
     if (!bookingRide) return;
 
-    // ✅ Check seats against fresh data
     if (seats > bookingRide.availableSeats) {
       addNotification({
         title: 'Not enough seats',
@@ -116,17 +182,31 @@ export default function RideSearch({ onNavigate }) {
       return;
     }
 
+    if (pickupIdx >= dropoffIdx) {
+      addNotification({
+        title: 'Invalid stops',
+        message: 'Dropoff must be after pickup on the route.',
+        type: 'error'
+      });
+      return;
+    }
+
     setConfirmLoading(true);
     try {
+      const pickupPoint = fareLadder[pickupIdx];
+      const dropoffPoint = fareLadder[dropoffIdx];
+
       await rideService.bookRide({
         rideId: bookingRide.id,
-        seatsToBook: Number(seats), // ✅ Ensure it's a number
-        pickupLatitude: bookingRide.startLatitude,
-        pickupLongitude: bookingRide.startLongitude,
-        pickupAddress: bookingRide.startAddress,
-        dropoffLatitude: bookingRide.endLatitude,
-        dropoffLongitude: bookingRide.endLongitude,
-        dropoffAddress: bookingRide.endAddress,
+        seatsToBook: Number(seats),
+        pickupLatitude: pickupPoint.lat,
+        pickupLongitude: pickupPoint.lon,
+        pickupAddress: pickupPoint.name,
+        dropoffLatitude: dropoffPoint.lat,
+        dropoffLongitude: dropoffPoint.lon,
+        dropoffAddress: dropoffPoint.name,
+        pickupStopSequence: pickupIdx,
+        dropoffStopSequence: dropoffIdx,
       });
       setBooked(true);
       setBookingRide(null);
@@ -213,7 +293,7 @@ export default function RideSearch({ onNavigate }) {
             <div>
               <div style={{ fontSize: 13, fontWeight: 600 }}>AI Ride Matching Active</div>
               <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>
-                K-Means clustering grouped {results.length} rides. Showing results ranked by AI match score & minimum detour.
+                K-Means clustering grouped {results.length} rides. Showing results ranked by AI match score &amp; minimum detour.
               </div>
             </div>
             <div style={{ marginLeft: 'auto', fontWeight: 700, color: 'var(--accent-primary)', fontSize: 14 }}>
@@ -258,14 +338,46 @@ export default function RideSearch({ onNavigate }) {
                   <div className="ride-meta-item">📏 {ride.distance}</div>
                   <div className="ride-meta-item">⏱ {ride.eta}</div>
                   {ride.stops.length > 0 && (
-                    <div className="ride-meta-item">🛑 Stops: {ride.stops.join(', ')}</div>
+                    <div className="ride-meta-item">🛑 {ride.stops.length} stop{ride.stops.length > 1 ? 's' : ''}</div>
                   )}
                 </div>
+
+                {/* M3: Fare Breakdown for rides with stops */}
+                {ride._fareLadder && ride._fareLadder.length > 2 && (
+                  <div style={{
+                    background: 'rgba(79,156,249,0.06)',
+                    border: '1px solid rgba(79,156,249,0.15)',
+                    borderRadius: 'var(--radius-md)',
+                    padding: '10px 14px',
+                    marginBottom: 14,
+                    fontSize: 12,
+                  }}>
+                    <div style={{ fontWeight: 700, marginBottom: 6, fontSize: 12, color: 'var(--text-muted)' }}>
+                      💰 Dynamic Fare Breakdown
+                    </div>
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px 16px' }}>
+                      {ride._fareLadder.map((point, idx) => (
+                        <span key={idx} style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                          <span style={{
+                            width: 6, height: 6, borderRadius: '50%',
+                            background: idx === 0 ? 'var(--accent-success, #00d4aa)'
+                              : idx === ride._fareLadder.length - 1 ? 'var(--accent-primary, #7c6af5)'
+                              : 'var(--accent-warning, #ffb347)',
+                            display: 'inline-block',
+                          }} />
+                          <span>{point.name.length > 30 ? point.name.substring(0, 30) + '…' : point.name}</span>
+                          <span style={{ fontWeight: 700, color: 'var(--accent-primary)' }}>₹{point.fareFromOrigin}</span>
+                          {idx < ride._fareLadder.length - 1 && <span style={{ color: 'var(--text-muted)', margin: '0 2px' }}>→</span>}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                )}
 
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 12 }}>
                   <div>
                     <span style={{ fontSize: 22, fontWeight: 800, color: 'var(--accent-primary)' }}>₹{ride.pricePerSeat}</span>
-                    <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>/seat</span>
+                    <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>/full route</span>
                     {seats > 1 && <span style={{ fontSize: 13, color: 'var(--text-muted)', marginLeft: 8 }}>
                       Total: ₹{ride.pricePerSeat * seats}
                     </span>}
@@ -299,15 +411,16 @@ export default function RideSearch({ onNavigate }) {
         )}
       </div>
 
-      {/* Booking Modal */}
+      {/* Booking Modal — M3: with stop selection and dynamic fare */}
       {bookingRide && (
         <div className="modal-overlay" onClick={() => setBookingRide(null)}>
-          <div className="modal" onClick={e => e.stopPropagation()}>
+          <div className="modal" onClick={e => e.stopPropagation()} style={{ maxWidth: 520 }}>
             <div className="modal-header">
               <h3>Confirm Booking</h3>
               <button className="modal-close" onClick={() => setBookingRide(null)}>✕</button>
             </div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+              {/* Route overview */}
               <div style={{ background: 'var(--bg-card)', borderRadius: 'var(--radius-md)', padding: 16 }}>
                 <div className="ride-route" style={{ marginBottom: 12 }}>
                   <span className="route-dot origin" />
@@ -323,13 +436,103 @@ export default function RideSearch({ onNavigate }) {
                 </div>
               </div>
 
+              {/* M3: Pickup & Dropoff Stop Selectors */}
+              {fareLadder.length > 2 && (
+                <div style={{
+                  background: 'rgba(124,106,245,0.06)',
+                  border: '1px solid rgba(124,106,245,0.18)',
+                  borderRadius: 'var(--radius-md)',
+                  padding: 16,
+                }}>
+                  <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 12 }}>
+                    📍 Select Your Stops
+                  </div>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+                    <div className="input-group">
+                      <label className="input-label" style={{ fontSize: 12 }}>Pickup</label>
+                      <select
+                        id="pickup-stop"
+                        className="input-field"
+                        value={pickupIdx}
+                        onChange={(e) => {
+                          const newIdx = Number(e.target.value);
+                          setPickupIdx(newIdx);
+                          if (newIdx >= dropoffIdx) {
+                            setDropoffIdx(newIdx + 1 < fareLadder.length ? newIdx + 1 : fareLadder.length - 1);
+                          }
+                        }}
+                      >
+                        {fareLadder.slice(0, -1).map((point, idx) => (
+                          <option key={idx} value={idx}>
+                            {point.name.length > 40 ? point.name.substring(0, 40) + '…' : point.name}
+                            {idx === 0 ? ' (Origin)' : ''}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <div className="input-group">
+                      <label className="input-label" style={{ fontSize: 12 }}>Dropoff</label>
+                      <select
+                        id="dropoff-stop"
+                        className="input-field"
+                        value={dropoffIdx}
+                        onChange={(e) => setDropoffIdx(Number(e.target.value))}
+                      >
+                        {fareLadder.map((point, idx) => (
+                          idx > pickupIdx && (
+                            <option key={idx} value={idx}>
+                              {point.name.length > 40 ? point.name.substring(0, 40) + '…' : point.name}
+                              {idx === fareLadder.length - 1 ? ' (Destination)' : ''}
+                            </option>
+                          )
+                        ))}
+                      </select>
+                    </div>
+                  </div>
+
+                  {/* Dynamic fare preview */}
+                  {currentSegmentFare != null && (
+                    <div style={{
+                      marginTop: 12,
+                      padding: '10px 14px',
+                      background: 'rgba(0,212,170,0.08)',
+                      border: '1px solid rgba(0,212,170,0.2)',
+                      borderRadius: 'var(--radius-md)',
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      alignItems: 'center',
+                    }}>
+                      <div style={{ fontSize: 12 }}>
+                        <span style={{ color: 'var(--text-muted)' }}>Segment: </span>
+                        <span style={{ fontWeight: 600 }}>
+                          {fareLadder[pickupIdx]?.name.length > 20
+                            ? fareLadder[pickupIdx]?.name.substring(0, 20) + '…'
+                            : fareLadder[pickupIdx]?.name}
+                        </span>
+                        <span style={{ color: 'var(--text-muted)', margin: '0 4px' }}>→</span>
+                        <span style={{ fontWeight: 600 }}>
+                          {fareLadder[dropoffIdx]?.name.length > 20
+                            ? fareLadder[dropoffIdx]?.name.substring(0, 20) + '…'
+                            : fareLadder[dropoffIdx]?.name}
+                        </span>
+                      </div>
+                      <div style={{ fontWeight: 800, color: 'var(--accent-primary)', fontSize: 15 }}>
+                        ₹{currentSegmentFare}/seat
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Total Amount */}
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                 <span style={{ color: 'var(--text-muted)', fontSize: 14 }}>Total Amount</span>
                 <span style={{ fontSize: 24, fontWeight: 800, color: 'var(--accent-primary)' }}>
-                  ₹{bookingRide.pricePerSeat * seats}
+                  ₹{(currentSegmentFare != null ? currentSegmentFare : bookingRide.pricePerSeat) * seats}
                 </span>
               </div>
 
+              {/* Safety OTP */}
               <div style={{ background: 'rgba(0,212,170,0.07)', border: '1px solid rgba(0,212,170,0.2)', borderRadius: 'var(--radius-md)', padding: 12, fontSize: 13 }}>
                 <div style={{ fontWeight: 600, marginBottom: 4 }}>🔐 Safety OTP</div>
                 <div style={{ color: 'var(--text-muted)' }}>An OTP will be generated after booking. Share it with your driver to start the ride.</div>

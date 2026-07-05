@@ -31,7 +31,7 @@ export default function MyBookings() {
             date: ride.departureTime ? new Date(ride.departureTime).toLocaleString() : 'TBD',
             seats: booking.seatsBooked,
             amount: booking.fare,
-            status: status === 'completed' ? 'completed' : status === 'cancelled' ? 'cancelled' : 'upcoming',
+            status: status === 'completed' ? 'completed' : status === 'cancelled' ? 'cancelled' : status === 'rejected' ? 'rejected' : status === 'accepted' ? 'accepted' : 'upcoming',
             otp: booking.otp || null,
             rating: booking.rating || null,
           };
@@ -52,7 +52,9 @@ export default function MyBookings() {
   const statusColors = {
     completed: 'badge-success',
     upcoming: 'badge-blue',
+    accepted: 'badge-success',
     cancelled: 'badge-danger',
+    rejected: 'badge-danger',
   };
 
   const submitRating = async () => {
@@ -177,8 +179,8 @@ export default function MyBookings() {
                 <span style={{ color: 'var(--accent-primary)', fontWeight: 600 }}>₹{booking.amount}</span>
               </div>
 
-              {/* Cancel button for PENDING and CONFIRMED bookings */}
-              {(booking.status === 'upcoming') && (
+              {/* Cancel button for upcoming or accepted bookings */}
+              {(booking.status === 'upcoming' || booking.status === 'accepted') && (
                 <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 16 }}>
                   <button
   className="btn btn-warning btn-sm"
@@ -198,8 +200,8 @@ export default function MyBookings() {
                 </div>
               )}
 
-              {/* OTP for upcoming rides */}
-              {booking.status === 'upcoming' && (
+              {/* OTP for accepted rides */}
+              {booking.status === 'accepted' && (
                 <div style={{
                   background: 'var(--accent-primary-dim)',
                   border: '1px solid rgba(0,212,170,0.3)',

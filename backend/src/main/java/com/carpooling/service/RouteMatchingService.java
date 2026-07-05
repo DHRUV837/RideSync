@@ -8,7 +8,15 @@ import java.util.List;
 @Service
 public class RouteMatchingService {
 
-    public boolean isPickupNearRoute(double pickupLat, double pickupLon, String routeGeometryJson, double maxDistanceKm) {
+    /**
+     * Check if a rider's route matches the driver's route with direction validation.
+     * Returns true only if:
+     * 1. Both pickup and destination are near the route
+     * 2. Pickup occurs before destination along the route
+     * 3. Rider travels in the same direction as the driver
+     */
+    public boolean isRouteMatch(double pickupLat, double pickupLon, double destinationLat, double destinationLon,
+                                String routeGeometryJson, double maxDistanceKm) {
         if (routeGeometryJson == null || routeGeometryJson.isBlank()) {
             return false;
         }
@@ -18,13 +26,92 @@ public class RouteMatchingService {
             return false;
         }
 
-        for (double[] point : route) {
-            if (distanceKm(pickupLat, pickupLon, point[1], point[0]) <= maxDistanceKm) {
-                return true;
+        // Find nearest indices for pickup and destination
+        int pickupIndex = findNearestPointIndex(pickupLat, pickupLon, route, maxDistanceKm);
+        int destinationIndex = findNearestPointIndex(destinationLat, destinationLon, route, maxDistanceKm);
+
+        // Both must be within max distance
+        if (pickupIndex == -1 || destinationIndex == -1) {
+            return false;
+        }
+
+        // Pickup must occur before destination along the route
+        if (pickupIndex >= destinationIndex) {
+            return false;
+        }
+
+        // Validate direction alignment using bearing
+        double riderBearing = calculateBearing(pickupLat, pickupLon, destinationLat, destinationLon);
+        double routeBearing = calculateRouteBearing(route, pickupIndex, destinationIndex);
+        
+        // Allow up to 45 degrees deviation (π/4 radians)
+        double bearingDifference = Math.abs(normalizeAngle(riderBearing - routeBearing));
+        if (bearingDifference > Math.PI / 4) {
+            return false;
+        }
+
+        return true;
+    }
+
+    /**
+     * Find the index of the nearest point on the route within maxDistanceKm.
+     * Returns -1 if no point is within the threshold.
+     */
+    private int findNearestPointIndex(double lat, double lon, List<double[]> route, double maxDistanceKm) {
+        int nearestIndex = -1;
+        double minDistance = maxDistanceKm;
+
+        for (int i = 0; i < route.size(); i++) {
+            double[] point = route.get(i);
+            double distance = distanceKm(lat, lon, point[1], point[0]);
+            if (distance < minDistance) {
+                minDistance = distance;
+                nearestIndex = i;
             }
         }
 
-        return false;
+        return nearestIndex;
+    }
+
+    /**
+     * Calculate the average bearing of the route segment between two indices.
+     */
+    private double calculateRouteBearing(List<double[]> route, int startIndex, int endIndex) {
+        if (startIndex >= endIndex || startIndex < 0 || endIndex >= route.size()) {
+            return 0;
+        }
+
+        // Calculate bearing from start to end of segment
+        double[] start = route.get(startIndex);
+        double[] end = route.get(endIndex);
+        return calculateBearing(start[1], start[0], end[1], end[0]);
+    }
+
+    /**
+     * Calculate bearing between two points in radians.
+     */
+    private double calculateBearing(double lat1, double lon1, double lat2, double lon2) {
+        double dLon = Math.toRadians(lon2 - lon1);
+        lat1 = Math.toRadians(lat1);
+        lat2 = Math.toRadians(lat2);
+
+        double y = Math.sin(dLon) * Math.cos(lat2);
+        double x = Math.cos(lat1) * Math.sin(lat2) - Math.sin(lat1) * Math.cos(lat2) * Math.cos(dLon);
+        
+        return Math.atan2(y, x);
+    }
+
+    /**
+     * Normalize angle to range [-π, π].
+     */
+    private double normalizeAngle(double angle) {
+        while (angle > Math.PI) {
+            angle -= 2 * Math.PI;
+        }
+        while (angle < -Math.PI) {
+            angle += 2 * Math.PI;
+        }
+        return angle;
     }
 
     private List<double[]> parseGeometry(String routeGeometryJson) {

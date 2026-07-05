@@ -16,4 +16,6 @@ public class BookRideRequest {
     private Double dropoffLatitude;
     private Double dropoffLongitude;
     private String dropoffAddress;
+    private Integer pickupStopSequence;
+    private Integer dropoffStopSequence;
 }

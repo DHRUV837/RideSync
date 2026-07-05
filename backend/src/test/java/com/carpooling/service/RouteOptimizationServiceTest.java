@@ -66,7 +66,7 @@ class RouteOptimizationServiceTest {
         booking.setDropoffLatitude(22.5);
         booking.setDropoffLongitude(72.8);
         booking.setDropoffAddress("Nadiad");
-        booking.setStatus(RideBooking.BookingStatus.CONFIRMED);
+        booking.setStatus(RideBooking.BookingStatus.ACCEPTED);
 
         when(rideRepository.findById(1L)).thenReturn(Optional.of(ride));
         when(rideBookingRepository.findByRideId(1L)).thenReturn(List.of(booking));

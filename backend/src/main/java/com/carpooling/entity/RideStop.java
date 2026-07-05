@@ -30,8 +30,14 @@ public class RideStop {
     @Column(name = "longitude", nullable = false)
     private Double longitude;
 
+    @Column(name = "stop_name", nullable = false)
+    private String stopName;
+
     @Column(name = "address", nullable = false)
     private String address;
+
+    @Column(name = "fare_from_origin", nullable = false)
+    private Double fareFromOrigin;
 
     @Column(name = "stop_type")
     private String stopType;

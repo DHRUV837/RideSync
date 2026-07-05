@@ -45,7 +45,7 @@ public class RouteOptimizationService {
                 .orElseThrow(() -> new IllegalArgumentException("Ride not found"));
 
         List<RideBooking> acceptedBookings = rideBookingRepository.findByRideId(rideId).stream()
-                .filter(b -> b.getStatus() == RideBooking.BookingStatus.CONFIRMED || b.getStatus() == RideBooking.BookingStatus.ONGOING)
+                .filter(b -> b.getStatus() == RideBooking.BookingStatus.ACCEPTED || b.getStatus() == RideBooking.BookingStatus.CONFIRMED || b.getStatus() == RideBooking.BookingStatus.ONGOING)
                 .collect(Collectors.toList());
 
         if (acceptedBookings.isEmpty()) {

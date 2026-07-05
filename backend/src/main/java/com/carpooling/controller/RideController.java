@@ -4,9 +4,11 @@ import com.carpooling.dto.BookRideRequest;
 import com.carpooling.dto.BookingStatusUpdateRequest;
 import com.carpooling.dto.CreateRideRequest;
 import com.carpooling.dto.DriverAnalyticsDto;
+import com.carpooling.dto.FareMatrixDto;
 import com.carpooling.dto.OtpVerificationRequest;
 import com.carpooling.entity.Ride;
 import com.carpooling.entity.RideBooking;
+import com.carpooling.service.FareService;
 import com.carpooling.service.RideService;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
@@ -23,6 +25,9 @@ public class RideController {
 
     @Autowired
     private RideService rideService;
+
+    @Autowired
+    private FareService fareService;
 
     @Autowired
     private com.carpooling.security.JwtTokenProvider jwtTokenProvider;
@@ -224,6 +229,57 @@ public class RideController {
             return new ResponseEntity<>(error, HttpStatus.BAD_REQUEST);
         }
     }
+
+    // ─── M3: Dynamic Fare Endpoints ───────────────────────────────────
+
+    @GetMapping("/{rideId}/fares")
+    public ResponseEntity<Object> getFareMatrix(@PathVariable Long rideId) {
+        try {
+            Ride ride = rideService.getRideById(rideId);
+            if (ride == null) {
+                Map<String, String> error = new HashMap<>();
+                error.put("error", "Ride not found");
+                return new ResponseEntity<>(error, HttpStatus.NOT_FOUND);
+            }
+            FareMatrixDto matrix = fareService.getFareMatrix(ride);
+            return new ResponseEntity<>(matrix, HttpStatus.OK);
+        } catch (Exception e) {
+            Map<String, String> error = new HashMap<>();
+            error.put("error", "Could not compute fare matrix: " + e.getMessage());
+            return new ResponseEntity<>(error, HttpStatus.INTERNAL_SERVER_ERROR);
+        }
+    }
+
+    @GetMapping("/{rideId}/fare")
+    public ResponseEntity<Object> calculateFare(@PathVariable Long rideId,
+                                                 @RequestParam String pickup,
+                                                 @RequestParam String dropoff) {
+        try {
+            Ride ride = rideService.getRideById(rideId);
+            if (ride == null) {
+                Map<String, String> error = new HashMap<>();
+                error.put("error", "Ride not found");
+                return new ResponseEntity<>(error, HttpStatus.NOT_FOUND);
+            }
+            Double fare = fareService.calculateFare(ride, pickup, dropoff);
+            if (fare == null) {
+                Map<String, String> error = new HashMap<>();
+                error.put("error", "Could not calculate fare: invalid pickup or dropoff stop");
+                return new ResponseEntity<>(error, HttpStatus.BAD_REQUEST);
+            }
+            Map<String, Object> result = new HashMap<>();
+            result.put("pickup", pickup);
+            result.put("dropoff", dropoff);
+            result.put("fare", fare);
+            return new ResponseEntity<>(result, HttpStatus.OK);
+        } catch (Exception e) {
+            Map<String, String> error = new HashMap<>();
+            error.put("error", "Could not calculate fare: " + e.getMessage());
+            return new ResponseEntity<>(error, HttpStatus.INTERNAL_SERVER_ERROR);
+        }
+    }
+
+    // ─────────────────────────────────────────────────────────────────────
 
     private Long extractUserIdFromToken(String token) {
         if (token == null || token.isBlank()) {

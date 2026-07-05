@@ -28,7 +28,7 @@ export default function PassengerRequests({ onNavigate }) {
   }, [user?.id]);
 
   const handleAction = async (id, action) => {
-    const status = action === 'accepted' ? 'CONFIRMED' : 'CANCELLED';
+    const status = action === 'accepted' ? 'ACCEPTED' : 'REJECTED';
     try {
       await rideService.updateBookingStatus(id, { status });
       setRequests(prev => prev.map(r => r.id === id ? { ...r, status } : r));
@@ -83,7 +83,7 @@ export default function PassengerRequests({ onNavigate }) {
       pickup: r.pickupAddress || r?.ride?.startAddress || 'Unknown pickup',
       dropoff: r.dropoffAddress || r?.ride?.endAddress || 'Unknown dropoff',
       requestedAt: r.bookedAt ? new Date(r.bookedAt).toLocaleString() : 'N/A',
-      uiStatus: r.status === 'PENDING' ? 'pending' : r.status === 'CONFIRMED' ? 'accepted' : r.status === 'ONGOING' ? 'ongoing' : r.status === 'COMPLETED' ? 'completed' : 'rejected',
+      uiStatus: r.status === 'PENDING' ? 'pending' : r.status === 'ACCEPTED' ? 'accepted' : r.status === 'ONGOING' ? 'ongoing' : r.status === 'COMPLETED' ? 'completed' : 'rejected',
       riderRating: r?.rider?.averageRating || 4.8,
       matchScore: r.matchScore ?? 88,
       seats: r.seatsBooked || r.seats || 1,
@@ -144,7 +144,7 @@ export default function PassengerRequests({ onNavigate }) {
           </div>
           <button id="accept-all" className="btn btn-primary btn-sm"
             onClick={() => {
-              setRequests(prev => prev.map(r => r.status === 'PENDING' ? { ...r, status: 'CONFIRMED' } : r));
+              setRequests(prev => prev.map(r => r.status === 'PENDING' ? { ...r, status: 'ACCEPTED' } : r));
               addNotification({ title: 'All Accepted! ✅', message: 'All pending requests have been accepted.', type: 'success' });
             }}>
             Accept All
