@@ -58,6 +58,31 @@ const makePickupIcon = (number) => new L.DivIcon({
   iconAnchor: [20, 20],
 });
 
+// Blue driver stop markers
+const makeDriverStopIcon = (number) => new L.DivIcon({
+  html: `
+    <div style="
+      background: linear-gradient(135deg, #3498db, #2980b9);
+      width: 32px;
+      height: 32px;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 14px;
+      font-weight: 700;
+      color: white;
+      border: 3px solid white;
+      box-shadow: 0 3px 10px rgba(52,152,219,0.4);
+    ">
+      ${number}
+    </div>
+  `,
+  className: '',
+  iconSize: [32, 32],
+  iconAnchor: [16, 16],
+});
+
 // Red numbered dropoff markers
 const makeDropoffIcon = (number) => new L.DivIcon({
   html: `
@@ -200,36 +225,92 @@ export default function OptimizationMap({
   destination,
   acceptedRiders 
 }) {
+  // DEBUG: Print raw backend response
+  console.log("=== DEBUG: Raw Backend Response ===");
+  console.log("routeGeometry type:", typeof routeGeometry);
+  console.log("routeGeometry:", routeGeometry);
+  console.log("optimizedWaypoints:", optimizedWaypoints);
+  console.log("origin:", origin);
+  console.log("destination:", destination);
+  console.log("acceptedRiders:", acceptedRiders);
+
   const center = origin ? [origin.lat, origin.lon] : null;
   const safeOptimizedWaypoints = Array.isArray(optimizedWaypoints) ? optimizedWaypoints : [];
   
+  // Parse route geometry if it's a JSON string
+  const parsedRouteGeometry = typeof routeGeometry === 'string' 
+    ? JSON.parse(routeGeometry) 
+    : routeGeometry;
+  const safeRouteGeometry = Array.isArray(parsedRouteGeometry) ? parsedRouteGeometry : [];
+  
+  // DEBUG: Print route geometry details
+  console.log("=== DEBUG: Route Geometry ===");
+  console.log("safeRouteGeometry length:", safeRouteGeometry.length);
+  console.log("First 5 coordinates:", safeRouteGeometry.slice(0, 5));
+  console.log("Coordinate format check (first coord):", safeRouteGeometry[0]);
+
   // Calculate bounds from route geometry
-  const bounds = routeGeometry && routeGeometry.length > 0 
-    ? L.latLngBounds(routeGeometry.map(coord => [coord[0], coord[1]]))
+  const bounds = safeRouteGeometry.length > 0 
+    ? L.latLngBounds(safeRouteGeometry.map(coord => [coord[0], coord[1]]))
     : null;
 
   // Build waypoints with rider information
+  console.log("=== DEBUG: Optimized Waypoints Before Mapping ===");
+  console.log("safeOptimizedWaypoints:", safeOptimizedWaypoints);
   const waypoints = safeOptimizedWaypoints.map((wp, index) => {
+    const lat = wp.lat ?? wp.latitude;
+const lon = wp.lon ?? wp.longitude;
+    console.log(`=== DEBUG: Mapping waypoint ${index} ===`);
+    console.log("  Original wp:", wp);
+    console.log("  Extracted lat:", lat, "lon:", lon);
+    console.log("  wp.lat:", wp.lat, "wp.latitude:", wp.latitude);
+    console.log("  wp.lon:", wp.lon, "wp.longitude:", wp.longitude);
+    
     if (wp.id === 'origin' || wp.id === 'start') {
-      return {
+      const result = {
+        lat,
+        lon,
         ...wp,
         type: 'origin',
         label: 'Driver Start',
         location: origin?.address || 'Start Location',
       };
+      console.log("  Result (origin):", result);
+      return result;
     }
     if (wp.id === 'destination' || wp.id === 'end') {
-      return {
+      const result = {
+        lat,
+        lon,
         ...wp,
         type: 'destination',
         label: 'Driver Destination',
         location: destination?.address || 'End Location',
       };
+      console.log("  Result (destination):", result);
+      return result;
     }
 
+    // Handle driver stops separately from rider pickups
+    if (wp.type === 'driver_stop' || wp.id?.startsWith('driver-stop-')) {
+      const result = {
+        lat,
+        lon,
+        ...wp,
+        type: 'driver_stop',
+        label: wp.label || wp.stopName || 'Driver Stop',
+        location: wp.address || wp.stopName || 'Stop Location',
+      };
+      console.log("  Result (driver_stop):", result);
+      return result;
+    }
+
+    // Handle rider pickups
     const riderId = wp.riderId || wp.id?.replace('pickup-', '');
     const rider = acceptedRiders?.find(r => String(r.id) === String(riderId));
-    return {
+    const result = {
+      lat,
+      lon,
       ...wp,
       type: 'pickup',
       label: `Pickup ${rider?.passengerName || rider?.riderName || wp.riderName || 'Passenger'}`,
@@ -239,12 +320,17 @@ export default function OptimizationMap({
       riderName: rider?.passengerName || rider?.riderName || wp.riderName,
       order: index,
     };
+    console.log("  Result (pickup):", result);
+    return result;
   });
+
+  console.log("=== DEBUG: Waypoints After Mapping ===");
+  console.log("waypoints:", waypoints);
 
   // Build dropoff markers from accepted riders
   const dropoffMarkers = acceptedRiders?.map((rider, index) => {
-    const lat = rider.dropoffLat || rider.dropoffLatitude;
-    const lon = rider.dropoffLon || rider.dropoffLongitude;
+    const lat = rider.dropoffLat ?? rider.dropoffLatitude;
+const lon = rider.dropoffLon ?? rider.dropoffLongitude;
     const hasValidCoords = lat && lon && !isNaN(lat) && !isNaN(lon) && Math.abs(lat) > 0.1 && Math.abs(lon) > 0.1;
     return {
       type: 'dropoff',
@@ -273,15 +359,23 @@ export default function OptimizationMap({
         <MapLegend />
         
         {/* Render OSRM route geometry */}
-        {routeGeometry && routeGeometry.length > 0 && (
-          <Polyline
-            positions={routeGeometry}
-            color="#00d4aa"
-            weight={5}
-            opacity={0.9}
-            lineCap="round"
-            lineJoin="round"
-          />
+        {safeRouteGeometry.length > 0 && (
+          (() => {
+            console.log("=== DEBUG: Rendering Polyline ===");
+            console.log("safeRouteGeometry length:", safeRouteGeometry.length);
+            console.log("First 5 polyline coordinates:", safeRouteGeometry.slice(0, 5));
+            console.log("Last 5 polyline coordinates:", safeRouteGeometry.slice(-5));
+            return (
+              <Polyline
+                positions={safeRouteGeometry}
+                color="#00d4aa"
+                weight={5}
+                opacity={0.9}
+                lineCap="round"
+                lineJoin="round"
+              />
+            );
+          })()
         )}
         
         {/* Render origin marker */}
@@ -320,64 +414,148 @@ export default function OptimizationMap({
           </Marker>
         )}
 
-        {/* Render pickup markers */}
+{/* Render pickup markers */}
         {waypoints.filter(wp => wp.type === 'pickup').map((wp, i) => {
           const pickupIndex = waypoints.filter((w, idx) => w.type === 'pickup' && idx <= i).length;
-          return (
-            <Marker 
-              key={`pickup-${wp.id || i}`} 
-              position={[wp.lat, wp.lon]} 
-              icon={makePickupIcon(pickupIndex)}
+          console.log(`=== DEBUG: Rendering pickup marker ${i} ===`);
+          console.log("  wp:", wp);
+          console.log("  position:", [wp.lat, wp.lon]);
+        return (
+  wp.lat != null && wp.lon != null && (
+    <Marker
+      key={`pickup-${wp.id || i}`}
+      position={[wp.lat, wp.lon]}
+      icon={makePickupIcon(pickupIndex)}
+    >
+      <Popup>
+        <div style={{ minWidth: 240, padding: '4px 0' }}>
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 8,
+              marginBottom: 8,
+              paddingBottom: 8,
+              borderBottom: '1px solid #eee'
+            }}
+          >
+            <div
+              style={{
+                width: 32,
+                height: 32,
+                borderRadius: '50%',
+                background: 'linear-gradient(135deg, #00d4aa, #00b894)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                fontSize: '14px',
+                fontWeight: 700,
+                color: 'white'
+              }}
             >
-              <Popup>
-                <div style={{ minWidth: 240, padding: '4px 0' }}>
-                  <div style={{ 
-                    display: 'flex', 
-                    alignItems: 'center', 
-                    gap: 8, 
-                    marginBottom: 8,
-                    paddingBottom: 8,
-                    borderBottom: '1px solid #eee'
-                  }}>
-                    <div style={{
-                      width: 32,
-                      height: 32,
-                      borderRadius: '50%',
-                      background: 'linear-gradient(135deg, #00d4aa, #00b894)',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      fontSize: '14px',
-                      fontWeight: 700,
-                      color: 'white'
-                    }}>{pickupIndex}</div>
-                    <div>
-                      <strong style={{ fontSize: 15 }}>Pickup #{pickupIndex}</strong>
-                      <div style={{ fontSize: 12, color: '#666' }}>{wp.riderName || 'Passenger'}</div>
+              {pickupIndex}
+            </div>
+
+            <div>
+              <strong style={{ fontSize: 15 }}>Pickup #{pickupIndex}</strong>
+              <div style={{ fontSize: 12, color: '#666' }}>
+                {wp.riderName || 'Passenger'}
+              </div>
+            </div>
+          </div>
+
+          <div style={{ fontSize: 13, color: '#333', marginBottom: 4 }}>
+            <span style={{ color: '#666', fontWeight: 500 }}>📍 Pickup:</span>{" "}
+            {wp.pickupAddress || wp.location}
+          </div>
+
+          <div style={{ fontSize: 13, color: '#333', marginBottom: 4 }}>
+            <span style={{ color: '#666', fontWeight: 500 }}>🎯 Dropoff:</span>{" "}
+            {wp.dropAddress || "Drop location"}
+          </div>
+
+          {wp.fare && (
+            <div
+              style={{
+                marginTop: 8,
+                padding: "6px 10px",
+                background: "rgba(0,212,170,0.1)",
+                borderRadius: "4px",
+                fontSize: 13,
+                fontWeight: 600,
+                color: "#00d4aa"
+              }}
+            >
+              💰 Fare: ₹{wp.fare}
+            </div>
+          )}
+        </div>
+      </Popup>
+    </Marker>
+  )
+);
+        })}
+
+        {/* Render driver stop markers */}
+        {waypoints.filter(wp => wp.type === 'driver_stop').map((wp, i) => {
+          const stopIndex = waypoints.filter((w, idx) => w.type === 'driver_stop' && idx <= i).length;
+          console.log(`=== DEBUG: Rendering driver stop marker ${i} ===`);
+          console.log("  wp:", wp);
+          console.log("  position:", [wp.lat, wp.lon]);
+          console.log("  Expected Anand: lat=22.4739858, lon=72.7361779");
+          console.log("  Actual lat:", wp.lat, "lon:", wp.lon);
+          return (
+            wp.lat != null && wp.lon != null && (
+              <Marker
+                key={`driver-stop-${wp.id || i}`}
+                position={[wp.lat, wp.lon]}
+                icon={makeDriverStopIcon(stopIndex)}
+              >
+                <Popup>
+                  <div style={{ minWidth: 220, padding: '4px 0' }}>
+                    <div
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: 8,
+                        marginBottom: 8,
+                        paddingBottom: 8,
+                        borderBottom: '1px solid #eee'
+                      }}
+                    >
+                      <div
+                        style={{
+                          width: 28,
+                          height: 28,
+                          borderRadius: '50%',
+                          background: 'linear-gradient(135deg, #3498db, #2980b9)',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          fontSize: '12px',
+                          fontWeight: 700,
+                          color: 'white'
+                        }}
+                      >
+                        {stopIndex}
+                      </div>
+
+                      <div>
+                        <strong style={{ fontSize: 15 }}>Driver Stop #{stopIndex}</strong>
+                        <div style={{ fontSize: 12, color: '#666' }}>
+                          {wp.label || wp.stopName || 'Stop'}
+                        </div>
+                      </div>
+                    </div>
+
+                    <div style={{ fontSize: 13, color: '#333', marginBottom: 4 }}>
+                      <span style={{ color: '#666', fontWeight: 500 }}>📍 Location:</span>{" "}
+                      {wp.location || wp.address || 'Stop Location'}
                     </div>
                   </div>
-                  <div style={{ fontSize: 13, color: '#333', marginBottom: 4 }}>
-                    <span style={{ color: '#666', fontWeight: 500 }}>📍 Pickup:</span> {wp.pickupAddress || wp.location}
-                  </div>
-                  <div style={{ fontSize: 13, color: '#333', marginBottom: 4 }}>
-                    <span style={{ color: '#666', fontWeight: 500 }}>🎯 Dropoff:</span> {wp.dropAddress || 'Drop location'}
-                  </div>
-                  {wp.fare && (
-                    <div style={{ 
-                      marginTop: 8,
-                      padding: '6px 10px',
-                      background: 'rgba(0,212,170,0.1)',
-                      borderRadius: '4px',
-                      fontSize: 13,
-                      fontWeight: 600,
-                      color: '#00d4aa'
-                    }}>
-                      💰 Fare: ₹{wp.fare}
-                    </div>
-                  )}
-                </div>
-              </Popup>
-            </Marker>
+                </Popup>
+              </Marker>
+            )
           );
         })}
 

@@ -174,7 +174,7 @@ export default function OptimizedRoute() {
                 {/* Map */}
                 <div className="map-container" style={{ height: 500 }}>
                   <OptimizationMap
-                    routeGeometry={routeData?.routeGeometry}
+                    routeGeometry={optimized ? routeData?.routeGeometry : selectedRide?.routeGeometry}
                     optimizedWaypoints={routeData?.optimizedWaypoints}
                     origin={selectedRide ? {
                       lat: selectedRide.startLatitude,

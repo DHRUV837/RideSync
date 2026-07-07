@@ -58,12 +58,21 @@ public class RideController {
     }
 
     @GetMapping("/search")
-    public ResponseEntity<List<Ride>> searchRides(@RequestParam double pickupLat,
-                                                 @RequestParam double pickupLon,
-                                                 @RequestParam double destinationLat,
-                                                 @RequestParam double destinationLon,
-                                                 @RequestParam(defaultValue = "5") double maxDistanceKm) {
-        List<Ride> rides = rideService.searchRidesByRoute(pickupLat, pickupLon, destinationLat, destinationLon, maxDistanceKm);
+    public ResponseEntity<List<Ride>> searchRides(
+            @RequestParam double pickupLat,
+            @RequestParam double pickupLon,
+            @RequestParam double destinationLat,
+            @RequestParam double destinationLon,
+            @RequestParam String date,
+            @RequestParam(defaultValue = "5") double maxDistanceKm) {
+        List<Ride> rides = rideService.searchRidesByRoute(
+                pickupLat,
+                pickupLon,
+                destinationLat,
+                destinationLon,
+                date,
+                maxDistanceKm
+        );
         return new ResponseEntity<>(rides, HttpStatus.OK);
     }
 

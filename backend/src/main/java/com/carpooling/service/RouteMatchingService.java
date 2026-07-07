@@ -17,39 +17,48 @@ public class RouteMatchingService {
      */
     public boolean isRouteMatch(double pickupLat, double pickupLon, double destinationLat, double destinationLon,
                                 String routeGeometryJson, double maxDistanceKm) {
-        if (routeGeometryJson == null || routeGeometryJson.isBlank()) {
-            return false;
-        }
-
         List<double[]> route = parseGeometry(routeGeometryJson);
-        if (route.isEmpty()) {
-            return false;
-        }
 
-        // Find nearest indices for pickup and destination
+        System.out.println("Route points parsed = " + route.size());
+
         int pickupIndex = findNearestPointIndex(pickupLat, pickupLon, route, maxDistanceKm);
         int destinationIndex = findNearestPointIndex(destinationLat, destinationLon, route, maxDistanceKm);
 
-        // Both must be within max distance
+        System.out.println("Pickup Index = " + pickupIndex);
+        System.out.println("Destination Index = " + destinationIndex);
+
         if (pickupIndex == -1 || destinationIndex == -1) {
+            System.out.println("FAILED: Could not find pickup or destination on route");
             return false;
         }
 
-        // Pickup must occur before destination along the route
         if (pickupIndex >= destinationIndex) {
+            System.out.println("FAILED: Pickup comes after destination");
             return false;
         }
 
-        // Validate direction alignment using bearing
-        double riderBearing = calculateBearing(pickupLat, pickupLon, destinationLat, destinationLon);
-        double routeBearing = calculateRouteBearing(route, pickupIndex, destinationIndex);
-        
-        // Allow up to 45 degrees deviation (π/4 radians)
+        double riderBearing = calculateBearing(
+                pickupLat, pickupLon,
+                destinationLat, destinationLon);
+
+        double routeBearing = calculateRouteBearing(
+                route,
+                pickupIndex,
+                destinationIndex);
+
+        System.out.println("Rider Bearing = " + riderBearing);
+        System.out.println("Route Bearing = " + routeBearing);
+
         double bearingDifference = Math.abs(normalizeAngle(riderBearing - routeBearing));
+
+        System.out.println("Bearing Difference = " + Math.toDegrees(bearingDifference));
+
         if (bearingDifference > Math.PI / 4) {
+            System.out.println("FAILED: Bearing mismatch");
             return false;
         }
 
+        System.out.println("MATCH SUCCESS");
         return true;
     }
 

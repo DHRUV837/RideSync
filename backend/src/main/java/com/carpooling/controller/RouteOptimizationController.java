@@ -29,9 +29,12 @@ public class RouteOptimizationController {
             error.put("error", e.getMessage());
             return new ResponseEntity<>(error, HttpStatus.BAD_REQUEST);
         } catch (Exception e) {
+            e.printStackTrace();   // <-- ADD THIS
+
             Map<String, String> error = new HashMap<>();
             error.put("error", "Could not optimize route: " + e.getMessage());
             return new ResponseEntity<>(error, HttpStatus.INTERNAL_SERVER_ERROR);
+
         }
     }
 }

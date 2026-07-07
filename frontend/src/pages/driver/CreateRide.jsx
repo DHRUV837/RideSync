@@ -4,7 +4,7 @@ import { rideService } from '../../services/apiService';
 
 const geocodeLocation = async (address) => {
   const response = await fetch(
-    `https://nominatim.openstreetmap.org/search?format=json&limit=1&q=${encodeURIComponent(address)}`
+    `https://nominatim.openstreetmap.org/search?format=json&addressdetails=1&countrycodes=in&limit=10&q=${encodeURIComponent(address)}`
   );
 
   const data = await response.json();
@@ -13,10 +13,21 @@ const geocodeLocation = async (address) => {
     throw new Error(`Location not found: ${address}`);
   }
 
+  // Select best result by priority: city > town > municipality > suburb > village > fallback
+  const result =
+    data.find(r => r.type === "city") ??
+    data.find(r => r.type === "town") ??
+    data.find(r => r.type === "municipality") ??
+    data.find(r => r.type === "suburb") ??
+    data.find(r => r.type === "village") ??
+    data[0];
+
+  console.log("Selected geocoding result:", result);
+
   return {
-    latitude: parseFloat(data[0].lat),
-    longitude: parseFloat(data[0].lon),
-    address: data[0].display_name,
+    latitude: parseFloat(result.lat),
+    longitude: parseFloat(result.lon),
+    address: result.display_name,
   };
 };
 

@@ -4,16 +4,28 @@ import { rideService } from '../../services/apiService';
 
 const geocodeLocation = async (address) => {
   const response = await fetch(
-    `https://nominatim.openstreetmap.org/search?format=json&limit=1&q=${encodeURIComponent(address)}`
+    `https://nominatim.openstreetmap.org/search?format=json&addressdetails=1&countrycodes=in&limit=10&q=${encodeURIComponent(address)}`
   );
   const data = await response.json();
   if (!data.length) {
     throw new Error(`Location not found: ${address}`);
   }
+
+  // Select best result by priority: city > town > municipality > suburb > village > fallback
+  const result =
+    data.find(r => r.type === "city") ??
+    data.find(r => r.type === "town") ??
+    data.find(r => r.type === "municipality") ??
+    data.find(r => r.type === "suburb") ??
+    data.find(r => r.type === "village") ??
+    data[0];
+
+  console.log("Selected geocoding result:", result);
+
   return {
-    lat: parseFloat(data[0].lat),
-    lon: parseFloat(data[0].lon),
-    displayName: data[0].display_name,
+    lat: parseFloat(result.lat),
+    lon: parseFloat(result.lon),
+    displayName: result.display_name,
   };
 };
 
@@ -97,12 +109,13 @@ export default function RideSearch({ onNavigate }) {
       const pickup = await geocodeLocation(from);
       const destination = await geocodeLocation(to);
       const response = await rideService.searchRides({
-        pickupLat: pickup.lat,
-        pickupLon: pickup.lon,
-        destinationLat: destination.lat,
-        destinationLon: destination.lon,
-        maxDistanceKm: 5
-      });
+    pickupLat: pickup.lat,
+    pickupLon: pickup.lon,
+    destinationLat: destination.lat,
+    destinationLon: destination.lon,
+    date,
+    maxDistanceKm: 5
+});
       const availableRides = response.data || [];
       const normalized = availableRides.map((ride) => ({
         ...ride,

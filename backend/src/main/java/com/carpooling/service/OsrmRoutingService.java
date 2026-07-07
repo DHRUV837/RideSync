@@ -41,6 +41,10 @@ public class OsrmRoutingService {
 
         String url = osrmBaseUrl + "/" + coordinates + "?overview=full&geometries=geojson&steps=false";
 
+        // DEBUG: Print OSRM request URL
+        System.out.println("=== DEBUG: OSRM Request URL ===");
+        System.out.println(url);
+
         try {
             HttpRequest request = HttpRequest.newBuilder(URI.create(url))
                     .header("Accept", "application/json")
@@ -61,8 +65,23 @@ public class OsrmRoutingService {
             List<List<Double>> coordinatesList = new ArrayList<>();
             if (geometryNode.isArray()) {
                 for (JsonNode point : geometryNode) {
-                    coordinatesList.add(List.of(point.path(0).asDouble(), point.path(1).asDouble()));
+                    // OSRM GeoJSON returns [lon, lat], but Leaflet expects [lat, lon]
+                    // Swap coordinates for frontend compatibility
+                    coordinatesList.add(List.of(
+                            point.path(0).asDouble(),   // longitude
+                            point.path(1).asDouble()    // latitude
+                    ));
                 }
+            }
+
+            // DEBUG: Print OSRM geometry info
+            System.out.println("=== DEBUG: OSRM Geometry Info ===");
+            System.out.println("Number of coordinates returned: " + coordinatesList.size());
+            System.out.println("First 10 coordinates:");
+            int printCount = Math.min(10, coordinatesList.size());
+            for (int i = 0; i < printCount; i++) {
+                List<Double> coord = coordinatesList.get(i);
+                System.out.println("  " + i + ": [" + coord.get(0) + ", " + coord.get(1) + "]");
             }
 
             return new OsrmRouteSummary(

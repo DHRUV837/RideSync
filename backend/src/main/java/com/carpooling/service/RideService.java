@@ -14,6 +14,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.Comparator;
 
@@ -204,8 +205,33 @@ public class RideService {
         return rideRepository.findByAvailableSeatsGreaterThan(0);
     }
 
-    public List<Ride> searchRidesByRoute(double pickupLat, double pickupLon, double destinationLat, double destinationLon, double maxDistanceKm) {
-        List<Ride> allAvailableRides = rideRepository.findByAvailableSeatsGreaterThan(0);
+    public List<Ride> searchRidesByRoute(
+            double pickupLat,
+            double pickupLon,
+            double destinationLat,
+            double destinationLon,
+            String date,
+            double maxDistanceKm){
+        LocalDate searchDate = LocalDate.parse(date);
+
+        List<Ride> allAvailableRides =
+                rideRepository.findByAvailableSeatsGreaterThan(0)
+                        .stream()
+                        .filter(r -> r.getDepartureTime().toLocalDate().equals(searchDate))
+                        .toList();
+        System.out.println("========== SEARCH ==========");
+        System.out.println("Search date = " + searchDate);
+        System.out.println("Rides after date filter = " + allAvailableRides.size());
+
+        for (Ride ride : allAvailableRides) {
+            System.out.println("----------------------");
+            System.out.println("Ride ID = " + ride.getId());
+            System.out.println("Departure = " + ride.getDepartureTime());
+            System.out.println("Available Seats = " + ride.getAvailableSeats());
+            System.out.println("Geometry Null? " + (ride.getRouteGeometry() == null));
+            System.out.println("Geometry Length = " +
+                    (ride.getRouteGeometry() == null ? 0 : ride.getRouteGeometry().length()));
+        }
         List<Ride> matchedRides = new ArrayList<>();
 
         for (Ride ride : allAvailableRides) {

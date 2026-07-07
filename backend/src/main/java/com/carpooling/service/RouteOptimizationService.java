@@ -6,6 +6,7 @@ import com.carpooling.dto.PassengerSegmentDto;
 import com.carpooling.dto.RouteWaypointDto;
 import com.carpooling.entity.Ride;
 import com.carpooling.entity.RideBooking;
+import com.carpooling.entity.RideStop;
 import com.carpooling.repository.RideBookingRepository;
 import com.carpooling.repository.RideRepository;
 import com.fasterxml.jackson.core.type.TypeReference;
@@ -13,10 +14,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
-import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
+import java.util.*;
 import java.util.stream.Collectors;
 
 @Service
@@ -52,18 +50,84 @@ public class RouteOptimizationService {
             throw new IllegalArgumentException("No accepted riders available for optimization");
         }
 
-        List<RouteWaypointDto> waypoints = new ArrayList<>();
-        waypoints.add(buildOriginWaypoint(ride));
-        for (RideBooking booking : acceptedBookings) {
-            waypoints.add(buildPickupWaypoint(booking));
+        // DEBUG: Print driver route
+        System.out.println("=== DEBUG: Driver Route ===");
+        System.out.println("Origin: " + ride.getStartLatitude() + ", " + ride.getStartLongitude() + " (" + ride.getStartAddress() + ")");
+        System.out.println("Driver Intermediate Stops:");
+        if (ride.getStops() != null) {
+            ride.getStops().stream()
+                .sorted(java.util.Comparator.comparing(RideStop::getStopOrder))
+                .forEach(stop -> System.out.println("  Stop " + stop.getStopOrder() + ": " + stop.getLatitude() + ", " + stop.getLongitude() + " (" + stop.getStopName() + ")"));
+        } else {
+            System.out.println("  No driver stops");
         }
-        waypoints.add(buildDestinationWaypoint(ride));
+        System.out.println("Destination: " + ride.getEndLatitude() + ", " + ride.getEndLongitude() + " (" + ride.getEndAddress() + ")");
 
-        Map<String, Object> mlResponse = mlServiceClient.optimizeRoute(waypoints);
+        // DEBUG: Print accepted rider pickups
+        System.out.println("=== DEBUG: Accepted Rider Pickups ===");
+        for (RideBooking booking : acceptedBookings) {
+            String riderName = booking.getRider() != null && booking.getRider().getUser() != null
+                ? booking.getRider().getUser().getFullName()
+                : "Passenger";
+            System.out.println("Rider: " + riderName);
+            System.out.println("  Pickup: " + booking.getPickupLatitude() + ", " + booking.getPickupLongitude() + " (" + booking.getPickupAddress() + ")");
+            System.out.println("  Dropoff: " + booking.getDropoffLatitude() + ", " + booking.getDropoffLongitude() + " (" + booking.getDropoffAddress() + ")");
+        }
 
-        List<RouteWaypointDto> optimizedWaypoints = resolveOptimizedWaypoints(mlResponse, waypoints);
+        // Build waypoints for OR-Tools optimization (origin → rider pickups → destination)
+        List<RouteWaypointDto> optimizationWaypoints = new ArrayList<>();
+
+// Origin
+        optimizationWaypoints.add(buildOriginWaypoint(ride));
+
+// Driver intermediate stops
+        if (ride.getStops() != null && !ride.getStops().isEmpty()) {
+            ride.getStops().stream()
+                    .sorted(Comparator.comparing(RideStop::getStopOrder))
+                    .forEach(stop -> optimizationWaypoints.add(
+                            new RouteWaypointDto(
+                                    "driver-stop-" + stop.getId(),
+                                    "driver_stop",
+                                    stop.getLatitude(),
+                                    stop.getLongitude(),
+                                    stop.getStopName(),
+                                    stop.getStopName(),
+                                    null,
+                                    null
+                            )
+                    ));
+        }
+
+// Rider pickups
+        for (RideBooking booking : acceptedBookings) {
+            optimizationWaypoints.add(buildPickupWaypoint(booking));
+        }
+
+// Destination
+        optimizationWaypoints.add(buildDestinationWaypoint(ride));        System.out.println("===== WAYPOINTS SENT TO ML =====");
+        for (RouteWaypointDto wp : optimizationWaypoints) {
+            System.out.println(
+                    wp.getId() + " | " +
+                            wp.getType() + " | " +
+                            wp.getLabel() + " | " +
+                            wp.getLatitude() + "," +
+                            wp.getLongitude()
+            );
+        }
+        Map<String, Object> mlResponse = mlServiceClient.optimizeRoute(optimizationWaypoints);
+
+        List<RouteWaypointDto> optimizedWaypoints = resolveOptimizedWaypoints(mlResponse, optimizationWaypoints);
         OptimizationStatisticsDto statistics = resolveStatistics(mlResponse, acceptedBookings.size());
-        List<List<Double>> roadPath = extractRoadPath(mlResponse);
+        
+        // Get OSRM geometry through: origin → driver stops → optimized rider pickups → destination
+        List<List<Double>> roadPath = getOptimizedRouteGeometryWithDriverStops(ride, optimizedWaypoints);
+        
+        // DEBUG: Confirm geometry sent to frontend
+        System.out.println("=== DEBUG: Geometry Sent to Frontend ===");
+        System.out.println("Geometry object: roadPath (List<List<Double>>)");
+        System.out.println("Number of coordinates in roadPath: " + (roadPath != null ? roadPath.size() : 0));
+        System.out.println("Geometry source: OSRM response through driver stops + optimized rider pickups");
+        
         List<PassengerSegmentDto> passengerSegments = buildPassengerSegments(acceptedBookings, optimizedWaypoints, ride);
 
         return new OptimizeRouteResponse(
@@ -145,27 +209,52 @@ public class RouteOptimizationService {
         return earthRadiusKm * c;
     }
 
-    private List<List<Double>> extractRoadPath(Map<String, Object> mlResponse) {
-        if (mlResponse == null) {
-            return List.of();
-        }
-        Object roadPathObj = mlResponse.get("road_path");
-        if (!(roadPathObj instanceof List<?>)) {
-            return List.of();
-        }
-        List<List<Double>> roadPath = new ArrayList<>();
-        for (Object segment : (List<?>) roadPathObj) {
-            if (segment instanceof List<?>) {
-                List<?> point = (List<?>) segment;
-                if (point.size() >= 2 && point.get(0) instanceof Number && point.get(1) instanceof Number) {
-                    roadPath.add(List.of(
-                            ((Number) point.get(0)).doubleValue(),
-                            ((Number) point.get(1)).doubleValue()
-                    ));
+    private List<List<Double>> getOptimizedRouteGeometryWithDriverStops(Ride ride, List<RouteWaypointDto> optimizedWaypoints) {
+        try {
+            // Build OSRM waypoints: origin → driver stops → optimized rider pickups → destination
+            List<OsrmRoutingService.LatLon> osrmWaypoints = new ArrayList<>();
+            
+            // Add origin
+            osrmWaypoints.add(new OsrmRoutingService.LatLon(ride.getStartLatitude(), ride.getStartLongitude()));
+            
+            // Add driver's planned stops (sorted by stopOrder)
+            if (ride.getStops() != null) {
+                ride.getStops().stream()
+                    .sorted(java.util.Comparator.comparing(RideStop::getStopOrder))
+                    .forEach(stop -> osrmWaypoints.add(new OsrmRoutingService.LatLon(stop.getLatitude(), stop.getLongitude())));
+            }
+            
+            // Add optimized rider pickups (only pickup type, excluding driver stops)
+            for (RouteWaypointDto wp : optimizedWaypoints) {
+                if ("pickup".equals(wp.getType())) {
+                    osrmWaypoints.add(new OsrmRoutingService.LatLon(wp.getLatitude(), wp.getLongitude()));
                 }
             }
+            
+            // Add destination
+            osrmWaypoints.add(new OsrmRoutingService.LatLon(ride.getEndLatitude(), ride.getEndLongitude()));
+            
+            // DEBUG: Print final waypoint list sent to OSRM
+            System.out.println("=== DEBUG: Final OSRM Waypoint List ===");
+            for (int i = 0; i < osrmWaypoints.size(); i++) {
+                OsrmRoutingService.LatLon wp = osrmWaypoints.get(i);
+                System.out.println("  Waypoint " + i + ": " + wp.latitude() + ", " + wp.longitude());
+            }
+            
+            OsrmRoutingService.OsrmRouteSummary routeSummary = osrmRoutingService.getRouteSummaryThroughWaypoints(osrmWaypoints);
+            
+            // Parse geometry from OSRM response
+            String geometryJson = routeSummary.geometry();
+            if (geometryJson == null || geometryJson.isBlank()) {
+                return List.of();
+            }
+            
+            List<List<Double>> coordinates = objectMapper.readValue(geometryJson, new TypeReference<List<List<Double>>>() {});
+            return coordinates;
+        } catch (Exception ex) {
+            // Fallback to empty list if OSRM fails
+            return List.of();
         }
-        return roadPath;
     }
 
     private RouteWaypointDto buildOriginWaypoint(Ride ride) {
@@ -219,6 +308,7 @@ public class RouteOptimizationService {
 
         List<String> optimizedIds = new ArrayList<>();
         Object optimizedRouteObj = mlResponse.get("optimized_route");
+
         if (optimizedRouteObj instanceof List<?>) {
             for (Object item : (List<?>) optimizedRouteObj) {
                 optimizedIds.add(String.valueOf(item));
@@ -261,7 +351,13 @@ public class RouteOptimizationService {
         double moneySaved = extractDouble(rawStats.get("money_saved_rupees"));
         double timeSaved = extractDouble(rawStats.get("time_saved_minutes"));
         double estimatedDuration = extractDouble(rawStats.get("estimated_duration_minutes"));
-        long optimizationTime = rawStats.getOrDefault("optimization_time_ms", 0L) instanceof Number ? ((Number) rawStats.get("optimization_time_ms")).longValue() : 0L;
+        Object optimizationTimeObj = rawStats.get("optimization_time_ms");
+
+        long optimizationTime =
+                optimizationTimeObj instanceof Number
+                        ? ((Number) optimizationTimeObj).longValue()
+                        : 0L;
+        System.out.println(rawStats);
         String solver = String.valueOf(rawStats.getOrDefault("solver", "Google OR-Tools"));
         String algorithm = String.valueOf(rawStats.getOrDefault("algorithm", "PATH_CHEAPEST_ARC"));
 
